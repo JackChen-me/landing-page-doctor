@@ -34,7 +34,11 @@
 
 ## 安装
 
-克隆到 Claude Code 的 skills 目录：
+```bash
+npx skills add JackChen-me/landing-page-doctor
+```
+
+或手动安装：
 
 ```bash
 git clone https://github.com/JackChen-me/landing-page-doctor.git ~/.claude/skills/landing-page-doctor

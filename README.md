@@ -34,7 +34,11 @@ Each checkpoint uses **objective feature detection** (Y/N checks) rather than su
 
 ## Install
 
-Clone to your Claude Code skills directory:
+```bash
+npx skills add JackChen-me/landing-page-doctor
+```
+
+Or manually:
 
 ```bash
 git clone https://github.com/JackChen-me/landing-page-doctor.git ~/.claude/skills/landing-page-doctor
