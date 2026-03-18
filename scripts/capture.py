@@ -154,12 +154,22 @@ def main():
                 });
             result.cta_buttons = ctaButtons.slice(0, 10);
 
-            // First screen text content
+            // First screen text content (skip script/style/noscript/template tags)
+            const invisibleTags = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE', 'SVG', 'IFRAME']);
             const walker = document.createTreeWalker(
                 document.body, NodeFilter.SHOW_TEXT, {
                     acceptNode: (node) => {
-                        const rect = node.parentElement?.getBoundingClientRect();
-                        if (!rect || rect.top >= viewportHeight) return NodeFilter.FILTER_REJECT;
+                        const parent = node.parentElement;
+                        if (!parent) return NodeFilter.FILTER_REJECT;
+                        // Skip text inside invisible/non-content elements
+                        let el = parent;
+                        while (el && el !== document.body) {
+                            if (invisibleTags.has(el.tagName)) return NodeFilter.FILTER_REJECT;
+                            if (el.hidden || window.getComputedStyle(el).display === 'none') return NodeFilter.FILTER_REJECT;
+                            el = el.parentElement;
+                        }
+                        const rect = parent.getBoundingClientRect();
+                        if (!rect || rect.top >= viewportHeight || rect.height === 0) return NodeFilter.FILTER_REJECT;
                         const text = node.textContent.trim();
                         if (text.length < 2) return NodeFilter.FILTER_REJECT;
                         return NodeFilter.FILTER_ACCEPT;
