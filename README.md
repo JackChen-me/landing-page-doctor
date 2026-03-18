@@ -34,10 +34,21 @@ Each checkpoint uses **objective feature detection** (Y/N checks) rather than su
 
 ## Install
 
-Copy the skill to your Claude Code skills directory:
+### Via Plugin Marketplace (Recommended)
+
+In Claude Code, add the marketplace and install:
+
+```shell
+/plugin marketplace add JackChen-me/landing-page-doctor
+/plugin install landing-page-doctor@jackchen-me-landing-page-doctor
+/reload-plugins
+```
+
+### Via Local Testing
 
 ```bash
-git clone https://github.com/JackChen-me/landing-page-doctor.git ~/.claude/skills/landing-page-doctor
+git clone https://github.com/JackChen-me/landing-page-doctor.git
+claude --plugin-dir ./landing-page-doctor
 ```
 
 ### Prerequisites
@@ -54,7 +65,7 @@ playwright install chromium
 In Claude Code, run:
 
 ```
-/landing-page-doctor https://your-landing-page.com
+/landing-page-doctor:landing-page-doctor https://your-landing-page.com
 ```
 
 Or simply paste a URL and ask Claude to diagnose it:
@@ -65,7 +76,7 @@ Help me analyze this landing page: https://example.com
 
 ## Example Output
 
-See [`examples/linear-app.md`](examples/linear-app.md) for a full diagnostic report of linear.app.
+See [`skills/landing-page-doctor/examples/linear-app.md`](skills/landing-page-doctor/examples/linear-app.md) for a full diagnostic report of linear.app.
 
 **Report structure:**
 
@@ -111,13 +122,21 @@ URL: https://example.com
 
 ```
 landing-page-doctor/
-├── SKILL.md                    # Main skill definition + workflow + report template
-├── scripts/
-│   └── capture.py              # Playwright-based page capture + data extraction
-├── references/
-│   └── diagnosis-rules.md      # 10 checkpoints with scoring criteria + interpretation matrix
-└── examples/
-    └── linear-app.md           # Example report
+├── .claude-plugin/
+│   ├── plugin.json             # Plugin manifest
+│   └── marketplace.json        # Marketplace definition
+├── skills/
+│   └── landing-page-doctor/
+│       ├── SKILL.md            # Main skill definition + workflow + report template
+│       ├── scripts/
+│       │   └── capture.py      # Playwright-based page capture + data extraction
+│       ├── references/
+│       │   └── diagnosis-rules.md  # 10 checkpoints with scoring criteria
+│       └── examples/
+│           └── linear-app.md   # Example report
+├── README.md
+├── README.zh-CN.md
+└── LICENSE
 ```
 
 ## Methodology

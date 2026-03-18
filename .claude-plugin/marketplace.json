@@ -1,0 +1,14 @@
+{
+  "name": "JackChen-me Landing Page Doctor",
+  "description": "Landing Page first-screen conversion diagnosis skill for Claude Code",
+  "plugins": [
+    {
+      "name": "landing-page-doctor",
+      "description": "Diagnose Landing Page first-screen conversion problems with a 10-point scoring framework and actionable rewrite suggestions. Captures screenshots, extracts data, and generates reports with brand-maturity-aware interpretation.",
+      "source": {
+        "source": "path",
+        "path": "."
+      }
+    }
+  ]
+}

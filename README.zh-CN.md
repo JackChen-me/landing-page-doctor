@@ -34,10 +34,21 @@
 
 ## 安装
 
-将技能克隆到 Claude Code 的 skills 目录：
+### 通过 Plugin Marketplace 安装（推荐）
+
+在 Claude Code 中运行：
+
+```shell
+/plugin marketplace add JackChen-me/landing-page-doctor
+/plugin install landing-page-doctor@jackchen-me-landing-page-doctor
+/reload-plugins
+```
+
+### 本地测试
 
 ```bash
-git clone https://github.com/JackChen-me/landing-page-doctor.git ~/.claude/skills/landing-page-doctor
+git clone https://github.com/JackChen-me/landing-page-doctor.git
+claude --plugin-dir ./landing-page-doctor
 ```
 
 ### 依赖
@@ -54,7 +65,7 @@ playwright install chromium
 在 Claude Code 中运行：
 
 ```
-/landing-page-doctor https://your-landing-page.com
+/landing-page-doctor:landing-page-doctor https://your-landing-page.com
 ```
 
 或者直接贴 URL 让 Claude 诊断：
@@ -65,7 +76,7 @@ playwright install chromium
 
 ## 报告示例
 
-完整报告见 [`examples/linear-app.md`](examples/linear-app.md)（以 linear.app 为例）。
+完整报告见 [`skills/landing-page-doctor/examples/linear-app.md`](skills/landing-page-doctor/examples/linear-app.md)（以 linear.app 为例）。
 
 **报告结构：**
 
@@ -111,13 +122,21 @@ URL: https://example.com
 
 ```
 landing-page-doctor/
-├── SKILL.md                    # 技能定义 + 工作流 + 报告模板
-├── scripts/
-│   └── capture.py              # 基于 Playwright 的页面采集 + 数据提取
-├── references/
-│   └── diagnosis-rules.md      # 10 项检查点评分标准 + 解读矩阵
-└── examples/
-    └── linear-app.md           # 示例报告
+├── .claude-plugin/
+│   ├── plugin.json             # 插件清单
+│   └── marketplace.json        # Marketplace 定义
+├── skills/
+│   └── landing-page-doctor/
+│       ├── SKILL.md            # 技能定义 + 工作流 + 报告模板
+│       ├── scripts/
+│       │   └── capture.py      # 基于 Playwright 的页面采集 + 数据提取
+│       ├── references/
+│       │   └── diagnosis-rules.md  # 10 项检查点评分标准 + 解读矩阵
+│       └── examples/
+│           └── linear-app.md   # 示例报告
+├── README.md
+├── README.zh-CN.md
+└── LICENSE
 ```
 
 ## 方法论
