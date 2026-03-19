@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Landing Page Doctor — Capture Script
+Landing Page Doctor — Capture Script (v2.0)
 Captures desktop + mobile screenshots and extracts first-screen data from a URL.
 
 Usage:
@@ -17,6 +17,268 @@ import json
 import os
 import sys
 import time
+
+
+# Shared JS for safe text extraction (avoids innerText undefined errors)
+EXTRACT_JS = """() => {
+    const result = {};
+    const viewportHeight = window.innerHeight;
+    const safeText = (el) => (el.innerText || el.textContent || '').trim();
+
+    // Page title
+    result.page_title = document.title || '';
+
+    // Meta description
+    const metaDesc = document.querySelector('meta[name="description"]');
+    result.meta_description = metaDesc ? metaDesc.content : '';
+
+    // First screen headline (largest text in viewport)
+    const headings = Array.from(document.querySelectorAll('h1, h2, [class*="hero"] *, [class*="title"], [class*="heading"]'));
+    const firstScreenHeadings = headings
+        .filter(el => {
+            const rect = el.getBoundingClientRect();
+            return rect.top < viewportHeight && rect.height > 0;
+        })
+        .map(el => ({
+            tag: el.tagName.toLowerCase(),
+            text: safeText(el),
+            fontSize: parseFloat(window.getComputedStyle(el).fontSize),
+        }))
+        .filter(h => h.text.length > 0)
+        .sort((a, b) => b.fontSize - a.fontSize);
+    result.first_screen_headings = firstScreenHeadings.slice(0, 5);
+
+    // Nav items count
+    const navItems = document.querySelectorAll('nav a, nav button, header nav li');
+    result.nav_items_count = navItems.length;
+
+    // CTA buttons in first screen (with href for path consistency check)
+    const allButtons = Array.from(document.querySelectorAll('a, button'));
+    const ctaKeywords = /sign|start|try|free|demo|begin|get|create|pricing|注册|开始|试用|免费|体验|立即/i;
+    const ctaButtons = allButtons
+        .filter(el => {
+            const rect = el.getBoundingClientRect();
+            if (rect.top >= viewportHeight || rect.height === 0) return false;
+            const text = safeText(el);
+            const style = window.getComputedStyle(el);
+            const isCTA = ctaKeywords.test(text) ||
+                style.backgroundColor !== 'rgba(0, 0, 0, 0)' && el.tagName === 'A' ||
+                el.tagName === 'BUTTON';
+            return isCTA && text.length > 0 && text.length < 50;
+        })
+        .map(el => {
+            const style = window.getComputedStyle(el);
+            const rect = el.getBoundingClientRect();
+            // Get href — for buttons, check parent anchor
+            let href = '';
+            if (el.href) {
+                href = el.href;
+            } else if (el.closest && el.closest('a')) {
+                href = el.closest('a').href || '';
+            }
+            return {
+                text: safeText(el),
+                tag: el.tagName.toLowerCase(),
+                href: href,
+                bgColor: style.backgroundColor,
+                color: style.color,
+                fontSize: parseFloat(style.fontSize),
+                inTopHalf: rect.top < viewportHeight / 2,
+                width: Math.round(rect.width),
+                height: Math.round(rect.height),
+            };
+        });
+    result.cta_buttons = ctaButtons.slice(0, 10);
+
+    // First screen text content (skip script/style/noscript/template tags)
+    const invisibleTags = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE', 'SVG', 'IFRAME']);
+    const walker = document.createTreeWalker(
+        document.body, NodeFilter.SHOW_TEXT, {
+            acceptNode: (node) => {
+                const parent = node.parentElement;
+                if (!parent) return NodeFilter.FILTER_REJECT;
+                let el = parent;
+                while (el && el !== document.body) {
+                    if (invisibleTags.has(el.tagName)) return NodeFilter.FILTER_REJECT;
+                    if (el.hidden || window.getComputedStyle(el).display === 'none') return NodeFilter.FILTER_REJECT;
+                    el = el.parentElement;
+                }
+                const rect = parent.getBoundingClientRect();
+                if (!rect || rect.top >= viewportHeight || rect.height === 0) return NodeFilter.FILTER_REJECT;
+                const text = node.textContent.trim();
+                if (text.length < 2) return NodeFilter.FILTER_REJECT;
+                return NodeFilter.FILTER_ACCEPT;
+            }
+        }
+    );
+    const texts = [];
+    while (walker.nextNode()) {
+        texts.push(walker.currentNode.textContent.trim());
+    }
+    result.first_screen_text = texts.join(' ').substring(0, 2000);
+
+    // Images in first screen
+    const images = Array.from(document.querySelectorAll('img, video, svg'))
+        .filter(el => {
+            const rect = el.getBoundingClientRect();
+            return rect.top < viewportHeight && rect.height > 20;
+        })
+        .map(el => ({
+            tag: el.tagName.toLowerCase(),
+            alt: el.alt || '',
+            width: Math.round(el.getBoundingClientRect().width),
+            height: Math.round(el.getBoundingClientRect().height),
+            src: el.src ? el.src.substring(0, 200) : '',
+        }));
+    result.first_screen_images = images;
+
+    // Trust elements detection (first screen only)
+    const firstScreenText = texts.join(' ');
+    const trustPatterns = {
+        user_count: /(\\d[\\d,]*\\+?\\s*(用户|开发者|团队|企业|users|teams|developers|customers|companies))/i,
+        stars: /(github|★|⭐|stars?)/i,
+        product_hunt: /product\\s*hunt/i,
+        testimonial: /"|"|「|」|testimonial|review/i,
+        trusted_by: /(trusted\\s+by|used\\s+by|loved\\s+by|chosen\\s+by|信赖|选择|使用)/i,
+        awards: /(award|winner|#\\d+\\s+on|排名|获奖|best\\s+of)/i,
+        press: /(featured\\s+in|as\\s+seen\\s+in|报道|媒体|techcrunch|forbes|wired|verge)/i,
+        security: /(soc\\s*2|gdpr|hipaa|iso\\s*27001|ssl|encrypted|安全认证)/i,
+        logos: document.querySelectorAll('[class*="logo"] img, [class*="client"] img, [class*="partner"] img, [class*="trust"] img, [class*="customer"] img, [class*="brand"] img').length,
+    };
+    result.trust_signals = {
+        has_user_count: trustPatterns.user_count.test(firstScreenText),
+        has_github_stars: trustPatterns.stars.test(firstScreenText),
+        has_product_hunt: trustPatterns.product_hunt.test(firstScreenText),
+        has_testimonials: trustPatterns.testimonial.test(firstScreenText),
+        has_trusted_by: trustPatterns.trusted_by.test(firstScreenText),
+        has_awards: trustPatterns.awards.test(firstScreenText),
+        has_press_mentions: trustPatterns.press.test(firstScreenText),
+        has_security_badges: trustPatterns.security.test(firstScreenText),
+        logo_count: trustPatterns.logos,
+    };
+
+    // Brand maturity signals
+    const allNavText = Array.from(document.querySelectorAll('nav a, header a')).map(a => safeText(a)).join(' ');
+    result.brand_signals = {
+        has_pricing_page: /pricing|定价|价格/i.test(allNavText),
+        has_docs: /docs|documentation|文档|api/i.test(allNavText),
+        has_blog: /blog|博客/i.test(allNavText),
+        has_careers: /careers|jobs|招聘/i.test(allNavText),
+        has_multiple_products: /products|solutions|平台|产品/i.test(allNavText),
+        nav_complexity: navItems.length,
+    };
+
+    // Content blocks count in first screen
+    const blocks = Array.from(document.querySelectorAll('section, div, article'))
+        .filter(el => {
+            const rect = el.getBoundingClientRect();
+            return rect.top < viewportHeight && rect.height > 50;
+        });
+    result.first_screen_block_count = Math.min(blocks.length, 30);
+
+    // ===== NEW v2.0 fields =====
+
+    // Product visualization detection
+    const productVisuals = {
+        has_screenshot: false,
+        has_video: false,
+        has_gif: false,
+        has_interactive_demo: false,
+        details: []
+    };
+
+    // Videos (including embedded YouTube/Vimeo/Loom)
+    const videoEls = document.querySelectorAll('video, iframe[src*="youtube"], iframe[src*="vimeo"], iframe[src*="loom"], iframe[src*="wistia"]');
+    const visibleVideos = Array.from(videoEls).filter(el => {
+        const rect = el.getBoundingClientRect();
+        return rect.top < viewportHeight * 2 && rect.height > 50;
+    });
+    productVisuals.has_video = visibleVideos.length > 0;
+
+    // Product screenshots / mockups (large images that aren't logos/icons/avatars)
+    const productImages = Array.from(document.querySelectorAll('img'))
+        .filter(img => {
+            const rect = img.getBoundingClientRect();
+            return rect.width > 200 && rect.height > 150 && rect.top < viewportHeight * 2;
+        })
+        .filter(img => {
+            const src = (img.src || '').toLowerCase();
+            const alt = (img.alt || '').toLowerCase();
+            const classes = (img.className || '').toLowerCase();
+            return !/(logo|icon|avatar|profile|flag|badge|emoji|brand)/i.test(src + ' ' + alt + ' ' + classes);
+        });
+    productVisuals.has_screenshot = productImages.length > 0;
+    productVisuals.details = productImages.map(img => ({
+        src: (img.src || '').substring(0, 200),
+        alt: img.alt || '',
+        width: Math.round(img.getBoundingClientRect().width),
+        height: Math.round(img.getBoundingClientRect().height),
+    })).slice(0, 5);
+
+    // GIFs
+    const gifs = Array.from(document.querySelectorAll('img[src*=".gif"]')).filter(el => {
+        const rect = el.getBoundingClientRect();
+        return rect.top < viewportHeight * 2 && rect.height > 50;
+    });
+    productVisuals.has_gif = gifs.length > 0;
+
+    // Interactive demos
+    const demoSelectors = '[class*="demo"], [id*="demo"], [data-demo], [class*="playground"], [id*="playground"], [class*="sandbox"]';
+    const demoElements = document.querySelectorAll(demoSelectors);
+    const visibleDemos = Array.from(demoElements).filter(el => {
+        const rect = el.getBoundingClientRect();
+        return rect.top < viewportHeight * 2 && rect.height > 50;
+    });
+    productVisuals.has_interactive_demo = visibleDemos.length > 0;
+
+    result.product_visualization = productVisuals;
+
+    // Pricing detection (scan full page, not just first screen)
+    const fullPageText = document.body.innerText || '';
+    const pricePattern = /(\\$\\d+|€\\d+|¥\\d+|￥\\d+|\\d+\\s*\\/\\s*(mo|month|year|yr|月|年)|free\\s*plan|free\\s*tier|免费版)/gi;
+    const priceMatches = fullPageText.match(pricePattern) || [];
+    const pricingSection = document.querySelector('[id*="pric" i], [class*="pric" i]');
+    result.pricing_signals = {
+        has_price_on_page: priceMatches.length > 0,
+        has_pricing_section: !!pricingSection,
+        price_mentions: [...new Set(priceMatches)].slice(0, 10),
+    };
+
+    // Target audience detection
+    const audiencePatterns = /(for\\s+(developers|founders|teams|designers|marketers|creators|startups|enterprises|businesses|agencies|freelancers|students|saas|indie|solopreneurs|makers)|built\\s+for|designed\\s+for|made\\s+for|perfect\\s+for|为.*打造|面向.*的|适合.*使用)/gi;
+    const audienceMatches = fullPageText.match(audiencePatterns) || [];
+    result.audience_signals = {
+        has_explicit_audience: audienceMatches.length > 0,
+        audience_mentions: [...new Set(audienceMatches.map(m => m.trim()))].slice(0, 5),
+    };
+
+    return result;
+}"""
+
+MOBILE_EXTRACT_JS = """() => {
+    const viewportHeight = window.innerHeight;
+    const viewportWidth = window.innerWidth;
+    const safeText = (el) => (el.innerText || el.textContent || '').trim();
+
+    // Check if CTA is visible without scrolling
+    const buttons = Array.from(document.querySelectorAll('a, button'));
+    const ctaKeywords = /sign|start|try|free|demo|begin|get|create|注册|开始|试用|免费|体验|立即/i;
+    const mobileCTA = buttons.find(el => {
+        const rect = el.getBoundingClientRect();
+        return rect.top < viewportHeight && ctaKeywords.test(safeText(el));
+    });
+
+    // Check for horizontal overflow
+    const hasOverflow = document.body.scrollWidth > viewportWidth + 5;
+
+    return {
+        mobile_cta_visible: !!mobileCTA,
+        mobile_cta_text: mobileCTA ? safeText(mobileCTA) : null,
+        has_horizontal_overflow: hasOverflow,
+        body_scroll_width: document.body.scrollWidth,
+        viewport_width: viewportWidth,
+    };
+}"""
 
 
 def main():
@@ -90,161 +352,14 @@ def main():
         except Exception:
             pass
 
+        # CRITICAL: Scroll to top before screenshot to ensure we capture the hero/first screen
+        desktop_page.evaluate("window.scrollTo(0, 0)")
+        desktop_page.wait_for_timeout(800)
+
         desktop_page.screenshot(path=os.path.join(output_dir, "desktop.png"))
 
         # Extract page data from desktop view
-        data = desktop_page.evaluate("""() => {
-            const result = {};
-
-            // Page title
-            result.page_title = document.title || '';
-
-            // Meta description
-            const metaDesc = document.querySelector('meta[name="description"]');
-            result.meta_description = metaDesc ? metaDesc.content : '';
-
-            // First screen headline (largest text in viewport)
-            const headings = Array.from(document.querySelectorAll('h1, h2, [class*="hero"] *, [class*="title"], [class*="heading"]'));
-            const viewportHeight = window.innerHeight;
-            const firstScreenHeadings = headings
-                .filter(el => {
-                    const rect = el.getBoundingClientRect();
-                    return rect.top < viewportHeight && rect.height > 0;
-                })
-                .map(el => ({
-                    tag: el.tagName.toLowerCase(),
-                    text: el.innerText.trim(),
-                    fontSize: parseFloat(window.getComputedStyle(el).fontSize),
-                }))
-                .filter(h => h.text.length > 0)
-                .sort((a, b) => b.fontSize - a.fontSize);
-            result.first_screen_headings = firstScreenHeadings.slice(0, 5);
-
-            // Nav items count
-            const navItems = document.querySelectorAll('nav a, nav button, header nav li');
-            result.nav_items_count = navItems.length;
-
-            // CTA buttons in first screen
-            const allButtons = Array.from(document.querySelectorAll('a, button'));
-            const ctaKeywords = /sign|start|try|free|demo|begin|get|create|注册|开始|试用|免费|体验|立即/i;
-            const ctaButtons = allButtons
-                .filter(el => {
-                    const rect = el.getBoundingClientRect();
-                    if (rect.top >= viewportHeight || rect.height === 0) return false;
-                    const text = el.innerText.trim();
-                    const style = window.getComputedStyle(el);
-                    const isCTA = ctaKeywords.test(text) ||
-                        style.backgroundColor !== 'rgba(0, 0, 0, 0)' && el.tagName === 'A' ||
-                        el.tagName === 'BUTTON';
-                    return isCTA && text.length > 0 && text.length < 50;
-                })
-                .map(el => {
-                    const style = window.getComputedStyle(el);
-                    const rect = el.getBoundingClientRect();
-                    return {
-                        text: el.innerText.trim(),
-                        tag: el.tagName.toLowerCase(),
-                        bgColor: style.backgroundColor,
-                        color: style.color,
-                        fontSize: parseFloat(style.fontSize),
-                        inTopHalf: rect.top < viewportHeight / 2,
-                        width: Math.round(rect.width),
-                        height: Math.round(rect.height),
-                    };
-                });
-            result.cta_buttons = ctaButtons.slice(0, 10);
-
-            // First screen text content (skip script/style/noscript/template tags)
-            const invisibleTags = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE', 'SVG', 'IFRAME']);
-            const walker = document.createTreeWalker(
-                document.body, NodeFilter.SHOW_TEXT, {
-                    acceptNode: (node) => {
-                        const parent = node.parentElement;
-                        if (!parent) return NodeFilter.FILTER_REJECT;
-                        // Skip text inside invisible/non-content elements
-                        let el = parent;
-                        while (el && el !== document.body) {
-                            if (invisibleTags.has(el.tagName)) return NodeFilter.FILTER_REJECT;
-                            if (el.hidden || window.getComputedStyle(el).display === 'none') return NodeFilter.FILTER_REJECT;
-                            el = el.parentElement;
-                        }
-                        const rect = parent.getBoundingClientRect();
-                        if (!rect || rect.top >= viewportHeight || rect.height === 0) return NodeFilter.FILTER_REJECT;
-                        const text = node.textContent.trim();
-                        if (text.length < 2) return NodeFilter.FILTER_REJECT;
-                        return NodeFilter.FILTER_ACCEPT;
-                    }
-                }
-            );
-            const texts = [];
-            while (walker.nextNode()) {
-                texts.push(walker.currentNode.textContent.trim());
-            }
-            result.first_screen_text = texts.join(' ').substring(0, 2000);
-
-            // Images in first screen
-            const images = Array.from(document.querySelectorAll('img, video, svg'))
-                .filter(el => {
-                    const rect = el.getBoundingClientRect();
-                    return rect.top < viewportHeight && rect.height > 20;
-                })
-                .map(el => ({
-                    tag: el.tagName.toLowerCase(),
-                    alt: el.alt || '',
-                    width: Math.round(el.getBoundingClientRect().width),
-                    height: Math.round(el.getBoundingClientRect().height),
-                    src: el.src ? el.src.substring(0, 200) : '',
-                }));
-            result.first_screen_images = images;
-
-            // Trust elements detection (first screen only)
-            const firstScreenText = texts.join(' ');
-            const trustPatterns = {
-                user_count: /(\d[\d,]*\+?\s*(用户|开发者|团队|企业|users|teams|developers|customers|companies))/i,
-                stars: /(github|★|⭐|stars?)/i,
-                product_hunt: /product\s*hunt/i,
-                testimonial: /"|"|「|」|testimonial|review/i,
-                trusted_by: /(trusted\s+by|used\s+by|loved\s+by|chosen\s+by|信赖|选择|使用)/i,
-                awards: /(award|winner|#\d+\s+on|排名|获奖|best\s+of)/i,
-                press: /(featured\s+in|as\s+seen\s+in|报道|媒体|techcrunch|forbes|wired|verge)/i,
-                security: /(soc\s*2|gdpr|hipaa|iso\s*27001|ssl|encrypted|安全认证)/i,
-                logos: document.querySelectorAll('[class*="logo"] img, [class*="client"] img, [class*="partner"] img, [class*="trust"] img, [class*="customer"] img, [class*="brand"] img').length,
-            };
-            result.trust_signals = {
-                has_user_count: trustPatterns.user_count.test(firstScreenText),
-                has_github_stars: trustPatterns.stars.test(firstScreenText),
-                has_product_hunt: trustPatterns.product_hunt.test(firstScreenText),
-                has_testimonials: trustPatterns.testimonial.test(firstScreenText),
-                has_trusted_by: trustPatterns.trusted_by.test(firstScreenText),
-                has_awards: trustPatterns.awards.test(firstScreenText),
-                has_press_mentions: trustPatterns.press.test(firstScreenText),
-                has_security_badges: trustPatterns.security.test(firstScreenText),
-                logo_count: trustPatterns.logos,
-            };
-
-            // Brand maturity signals
-            const allNavText = Array.from(document.querySelectorAll('nav a, header a')).map(a => a.innerText.trim()).join(' ');
-            result.brand_signals = {
-                has_pricing_page: /pricing|定价|价格/i.test(allNavText),
-                has_docs: /docs|documentation|文档|api/i.test(allNavText),
-                has_blog: /blog|博客/i.test(allNavText),
-                has_careers: /careers|jobs|招聘/i.test(allNavText),
-                has_multiple_products: /products|solutions|平台|产品/i.test(allNavText),
-                nav_complexity: navItems.length,
-            };
-
-            // Content blocks count in first screen
-            const blocks = Array.from(document.querySelectorAll('section, div, article'))
-                .filter(el => {
-                    const rect = el.getBoundingClientRect();
-                    return rect.top < viewportHeight && rect.height > 50;
-                    // Only count direct children type blocks
-                });
-            result.first_screen_block_count = Math.min(blocks.length, 20);
-
-            return result;
-        }""")
-
+        data = desktop_page.evaluate(EXTRACT_JS)
         results.update(data)
         desktop_ctx.close()
 
@@ -283,33 +398,14 @@ def main():
         except Exception:
             pass
 
+        # CRITICAL: Scroll to top before screenshot
+        mobile_page.evaluate("window.scrollTo(0, 0)")
+        mobile_page.wait_for_timeout(800)
+
         mobile_page.screenshot(path=os.path.join(output_dir, "mobile.png"))
 
         # Check mobile-specific issues
-        mobile_data = mobile_page.evaluate("""() => {
-            const viewportHeight = window.innerHeight;
-            const viewportWidth = window.innerWidth;
-
-            // Check if CTA is visible without scrolling
-            const buttons = Array.from(document.querySelectorAll('a, button'));
-            const ctaKeywords = /sign|start|try|free|demo|begin|get|create|注册|开始|试用|免费|体验|立即/i;
-            const mobileCTA = buttons.find(el => {
-                const rect = el.getBoundingClientRect();
-                return rect.top < viewportHeight && ctaKeywords.test(el.innerText);
-            });
-
-            // Check for horizontal overflow
-            const hasOverflow = document.body.scrollWidth > viewportWidth + 5;
-
-            return {
-                mobile_cta_visible: !!mobileCTA,
-                mobile_cta_text: mobileCTA ? mobileCTA.innerText.trim() : null,
-                has_horizontal_overflow: hasOverflow,
-                body_scroll_width: document.body.scrollWidth,
-                viewport_width: viewportWidth,
-            };
-        }""")
-
+        mobile_data = mobile_page.evaluate(MOBILE_EXTRACT_JS)
         results["mobile"] = mobile_data
 
         mobile_ctx.close()
@@ -328,6 +424,9 @@ def main():
     print(f"Nav items: {results.get('nav_items_count', 'N/A')}")
     print(f"CTA buttons found: {len(results.get('cta_buttons', []))}")
     print(f"Trust signals: {json.dumps(results.get('trust_signals', {}), ensure_ascii=False)}")
+    print(f"Product visuals: screenshot={results.get('product_visualization', {}).get('has_screenshot')}, video={results.get('product_visualization', {}).get('has_video')}, gif={results.get('product_visualization', {}).get('has_gif')}, demo={results.get('product_visualization', {}).get('has_interactive_demo')}")
+    print(f"Pricing: {json.dumps(results.get('pricing_signals', {}), ensure_ascii=False)}")
+    print(f"Audience: {json.dumps(results.get('audience_signals', {}), ensure_ascii=False)}")
 
 
 if __name__ == "__main__":
